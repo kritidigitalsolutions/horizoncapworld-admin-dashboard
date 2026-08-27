@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Outlet } from 'react-router-dom';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import Breadcrumb from './Breadcrumb';
@@ -36,7 +37,7 @@ export default function Layout({ children }) {
         <main className="flex-1 p-4 sm:p-6 lg:p-8">
           <Breadcrumb />
           <div className="page-enter">
-            {children}
+            {children || <Outlet />}
           </div>
         </main>
       </div>

@@ -21,27 +21,27 @@ const navSections = [
   {
     title: 'Core Platform',
     items: [
-      { path: '/', label: 'Dashboard', icon: RiDashboardLine, activeIcon: RiDashboardFill },
-      { path: '/investment-plans', label: 'Investment Plans', icon: RiFundsLine, activeIcon: RiFundsFill },
-      { path: '/users', label: 'Users Management', icon: RiGroupLine, activeIcon: RiGroupFill },
+      { path: '/admin', label: 'Dashboard', icon: RiDashboardLine, activeIcon: RiDashboardFill },
+      { path: '/admin/investment-plans', label: 'Investment Plans', icon: RiFundsLine, activeIcon: RiFundsFill },
+      { path: '/admin/users', label: 'Users Management', icon: RiGroupLine, activeIcon: RiGroupFill },
     ]
   },
   {
     title: 'Financial & Growth',
     items: [
-      { path: '/ranks', label: 'Rank Ladder', icon: RiTrophyLine, activeIcon: RiTrophyFill },
-      { path: '/referrals', label: 'Referral Plans', icon: RiNodeTree, activeIcon: RiNodeTree },
-      { path: '/transactions', label: 'Transactions', icon: RiExchangeDollarLine, activeIcon: RiExchangeDollarFill },
-      { path: '/payment-settings', label: 'Payment Settings', icon: RiBankCardLine, activeIcon: RiBankCardFill },
+      { path: '/admin/ranks', label: 'Rank Ladder', icon: RiTrophyLine, activeIcon: RiTrophyFill },
+      { path: '/admin/referrals', label: 'Referral Plans', icon: RiNodeTree, activeIcon: RiNodeTree },
+      { path: '/admin/transactions', label: 'Transactions', icon: RiExchangeDollarLine, activeIcon: RiExchangeDollarFill },
+      { path: '/admin/payment-settings', label: 'Payment Settings', icon: RiBankCardLine, activeIcon: RiBankCardFill },
     ]
   },
   {
     title: 'Desk & System',
     items: [
-      { path: '/support-tickets', label: 'Support Tickets', icon: RiTicketLine, activeIcon: RiTicketFill },
-      { path: '/support-channels', label: 'Support Channels', icon: RiCustomerService2Line, activeIcon: RiCustomerService2Fill },
-      { path: '/news-media', label: 'News & Media', icon: RiNewspaperLine, activeIcon: RiNewspaperFill },
-      { path: '/settings', label: 'Settings', icon: RiSettings3Line, activeIcon: RiSettings3Fill },
+      { path: '/admin/support-tickets', label: 'Support Tickets', icon: RiTicketLine, activeIcon: RiTicketFill },
+      { path: '/admin/support-channels', label: 'Support Channels', icon: RiCustomerService2Line, activeIcon: RiCustomerService2Fill },
+      { path: '/admin/news-media', label: 'News & Media', icon: RiNewspaperLine, activeIcon: RiNewspaperFill },
+      { path: '/admin/settings', label: 'Settings', icon: RiSettings3Line, activeIcon: RiSettings3Fill },
     ]
   }
 ];

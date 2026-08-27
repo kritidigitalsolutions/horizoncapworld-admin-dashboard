@@ -5,7 +5,7 @@ import { UilAngleRight } from '@iconscout/react-unicons';
 
 const routeLabels = {
   'investment-plans': 'Investment Plans',
-  'users': 'Users',
+  'users': 'Users Management',
   'ranks': 'Rank Ladder',
   'referrals': 'Referral Plans',
   'transactions': 'Transactions',
@@ -18,13 +18,14 @@ const routeLabels = {
 
 export default function Breadcrumb() {
   const location = useLocation();
-  const pathSegments = location.pathname.split('/').filter(Boolean);
-
-  if (pathSegments.length === 0) return null;
+  const pathSegments = location.pathname
+    .split('/')
+    .filter(Boolean)
+    .filter(segment => segment !== 'admin');
 
   return (
     <nav className="flex items-center gap-1.5 text-sm mb-6">
-      <Link to="/" className="flex items-center gap-1 text-gray-400 hover:text-gold-500 transition-colors">
+      <Link to="/admin" className="flex items-center gap-1 text-gray-400 hover:text-gold-500 transition-colors">
         <RiHome4Line size={16} />
         <span>Home</span>
       </Link>

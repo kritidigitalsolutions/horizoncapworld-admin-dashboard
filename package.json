@@ -17,6 +17,8 @@
   },
   "dependencies": {
     "@iconscout/react-unicons": "^2.2.5",
+    "axios": "^1.19.0",
+    "lucide-react": "^1.34.0",
     "react-icons": "^5.7.0",
     "react-router-dom": "^7.18.2",
     "recharts": "^3.10.1"
