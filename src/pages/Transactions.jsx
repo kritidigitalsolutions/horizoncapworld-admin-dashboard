@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   RiDownloadLine, RiCalendarLine, RiEyeLine, RiArrowUpCircleLine,
   RiArrowDownCircleLine, RiFlashlightLine, RiGiftLine, RiGlobalLine,
@@ -17,20 +17,17 @@ import Pagination from '../components/ui/Pagination';
 import SkeletonLoader from '../components/ui/SkeletonLoader';
 import PageHeader from '../components/ui/PageHeader';
 import { transactions as initialTransactions } from '../data/mockData';
+import {
+  getTransactions,
+  approveTransaction,
+  rejectTransaction,
+  deleteTransaction,
+  clearAllTransactions
+} from '../api/transactionsApi';
 
 export default function Transactions() {
   const [loading, setLoading] = useState(true);
-  const [txnList, setTxnList] = useState(() => {
-    try {
-      const saved = localStorage.getItem('horizon_transactions');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      }
-    } catch (e) {}
-    return initialTransactions;
-  });
-
+  const [txnList, setTxnList] = useState([]);
   const [activeTab, setActiveTab] = useState('all');
   const [search, setSearch] = useState('');
   const [selectedTxn, setSelectedTxn] = useState(null);
@@ -53,10 +50,79 @@ export default function Transactions() {
   const [customStartDate, setCustomStartDate] = useState('');
   const [customEndDate, setCustomEndDate] = useState('');
 
+  const fetchTxns = useCallback(async () => {
+    try {
+      const res = await getTransactions({
+        type: activeTab !== 'all' ? activeTab : undefined,
+        search: search.trim() || undefined,
+        limit: 150,
+      });
+
+      if (res?.success && Array.isArray(res.transactions) && res.transactions.length > 0) {
+        const formatted = res.transactions.map(t => {
+          const numAmt = Number(t.rawAmount || t.amount || 0);
+          return {
+            _id: t._id,
+            id: t.customId || t._id,
+            user: t.userName || t.user?.name || 'Investor',
+            userCustomId: t.userCustomId || 'HORIZON-USR-07',
+            userEmail: t.userEmail || '',
+            userPhone: t.userPhone || '',
+            country: t.country || 'Global',
+            type: t.type,
+            amount: `$${numAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+            rawAmount: numAmt,
+            currency: t.currency || 'USD',
+            gateway: t.gateway || 'Platform Vault',
+            gatewayType: t.gatewayType || (t.gateway?.toLowerCase().includes('usdt') || t.gateway?.toLowerCase().includes('btc') ? 'crypto' : 'fiat'),
+            gatewayAccount: t.gatewayAccount || t.address || '',
+            referenceNo: t.referenceNo || 'N/A',
+            date: t.date || (t.createdAt ? t.createdAt.split('T')[0] : '2026-08-20'),
+            time: t.time || (t.createdAt ? new Date(t.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '12:00'),
+            status: t.status || 'Pending',
+            fee: `$${Number(t.fee || 0).toFixed(2)}`,
+            netAmount: `$${Number(t.netAmount || numAmt).toLocaleString('en-US', { minimumFractionDigits: 2 })}`,
+            slipUrl: t.slipUrl || '',
+            proofOfPayment: t.slipUrl ? { dataUrl: t.slipUrl, isImage: true } : null,
+            clientNote: t.clientNote || (t.gateway ? `Processed via ${t.gateway}` : ''),
+            rejectReason: t.rejectReason || '',
+          };
+        });
+        setTxnList(formatted);
+      } else {
+        const saved = localStorage.getItem('horizon_transactions');
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setTxnList(parsed);
+              return;
+            }
+          } catch (e) {}
+        }
+        setTxnList(initialTransactions);
+      }
+    } catch (err) {
+      console.warn('Using fallback transactions data:', err.message);
+      const saved = localStorage.getItem('horizon_transactions');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            setTxnList(parsed);
+            return;
+          }
+        } catch (e) {}
+      }
+      setTxnList(initialTransactions);
+    } finally {
+      setLoading(false);
+    }
+  }, [activeTab, search]);
+
   useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 500);
-    return () => clearTimeout(timer);
-  }, []);
+    fetchTxns();
+  }, [fetchTxns]);
 
   // Real-time synchronization with User deposits & updates
   useEffect(() => {
@@ -113,9 +179,17 @@ export default function Transactions() {
   };
 
   // ──────────────── ADMIN APPROVE DEPOSIT ACTION ────────────────
-  const handleApproveDeposit = (txn) => {
+  const handleApproveDeposit = async (txn) => {
     if (!txn) return;
     const amountNum = txn.rawAmount || parseAmount(txn.amount);
+
+    try {
+      if (txn._id) {
+        await approveTransaction(txn._id);
+      }
+    } catch (err) {
+      console.warn('API approve offline, updating local cache:', err.message);
+    }
 
     const updatedList = txnList.map(t => {
       if (t.id === txn.id) {
@@ -169,9 +243,17 @@ export default function Transactions() {
   };
 
   // ──────────────── ADMIN REJECT DEPOSIT ACTION ────────────────
-  const handleRejectDeposit = (txn, reason) => {
+  const handleRejectDeposit = async (txn, reason) => {
     if (!txn) return;
     const finalReason = reason || customRejectReason || 'Payment verification failed / Transaction hash invalid';
+
+    try {
+      if (txn._id) {
+        await rejectTransaction(txn._id, { reason: finalReason });
+      }
+    } catch (err) {
+      console.warn('API reject offline, updating local cache:', err.message);
+    }
 
     const updatedList = txnList.map(t => {
       if (t.id === txn.id) {
@@ -206,8 +288,16 @@ export default function Transactions() {
   };
 
   // Delete Individual Transaction
-  const handleDeleteTxn = () => {
+  const handleDeleteTxn = async () => {
     if (!txnToDelete) return;
+    try {
+      if (txnToDelete._id) {
+        await deleteTransaction(txnToDelete._id);
+      }
+    } catch (err) {
+      console.warn('API delete offline, removing from local state:', err.message);
+    }
+
     const updatedList = txnList.filter(t => t.id !== txnToDelete.id);
     setTxnList(updatedList);
     localStorage.setItem('horizon_transactions', JSON.stringify(updatedList));
@@ -219,7 +309,13 @@ export default function Transactions() {
   };
 
   // Clear All Transactions
-  const handleClearAll = () => {
+  const handleClearAll = async () => {
+    try {
+      await clearAllTransactions();
+    } catch (err) {
+      console.warn('API clearAll offline, clearing local state:', err.message);
+    }
+
     setTxnList([]);
     localStorage.setItem('horizon_transactions', JSON.stringify([]));
     window.dispatchEvent(new CustomEvent('horizon-transactions-change', { detail: [] }));

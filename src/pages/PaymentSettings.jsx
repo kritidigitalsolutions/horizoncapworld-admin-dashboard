@@ -45,6 +45,7 @@ import {
   getDepositVideo,
   updateDepositVideo,
 } from "../api/paymentGatewaysApi";
+import { uploadFileToCloudinary, deleteFileFromCloudinary } from "../api/uploadApi";
 
 export default function PaymentSettings() {
   const [loading, setLoading] = useState(true);
@@ -256,12 +257,25 @@ export default function PaymentSettings() {
     }
   };
 
-  const handleFileUpload = (e) => {
+  const handleFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onloadend = () => setQrCodeUrl(reader.result);
       reader.readAsDataURL(file);
+
+      try {
+        const previousQr = qrCodeUrl || editingWallet?.qrCodeUrl;
+        const uploadRes = await uploadFileToCloudinary(file, {
+          folder: "horizoncap/payments",
+          oldUrl: previousQr,
+        });
+        if (uploadRes?.secure_url) {
+          setQrCodeUrl(uploadRes.secure_url);
+        }
+      } catch (err) {
+        console.warn("QR code upload to Cloudinary fallback:", err.message);
+      }
     }
   };
 
@@ -287,7 +301,7 @@ export default function PaymentSettings() {
     }
   };
 
-  const handleVideoFileUpload = (e) => {
+  const handleVideoFileUpload = async (e) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const videoObjectUrl = URL.createObjectURL(file);
@@ -297,6 +311,23 @@ export default function PaymentSettings() {
       videoUrl: videoObjectUrl,
       uploadedVideoName: file.name,
     }));
+
+    try {
+      const previousVideo = tutorialVideo?.videoUrl;
+      const uploadRes = await uploadFileToCloudinary(file, {
+        folder: "horizoncap/videos",
+        resource_type: "video",
+        oldUrl: previousVideo,
+      });
+      if (uploadRes?.secure_url) {
+        setVideoForm((prev) => ({
+          ...prev,
+          videoUrl: uploadRes.secure_url,
+        }));
+      }
+    } catch (err) {
+      console.warn("Video upload to Cloudinary fallback:", err.message);
+    }
   };
 
   const openCreateDrawer = (defaultCat = "Mobile E-Wallet") => {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   RiTrophyLine, RiMedalLine, RiAwardLine, RiVipCrownLine, RiGroupLine,
   RiMoneyDollarCircleLine, RiEditLine, RiCheckLine, RiPercentLine,
@@ -16,27 +16,22 @@ import Pagination from '../components/ui/Pagination';
 import SkeletonLoader from '../components/ui/SkeletonLoader';
 import PageHeader from '../components/ui/PageHeader';
 import { rankLadder as initialRanks, users } from '../data/mockData';
+import {
+  getAllRanks,
+  createRank,
+  updateRank,
+  deleteRank,
+  getAchieversLeaderboard
+} from '../api/ranksApi';
 
 export default function Ranks() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('ladder'); // 'ladder', 'achievers'
-  const [ranks, setRanks] = useState(() => {
-    const saved = localStorage.getItem('horizon_rank_ladder');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      } catch (e) {}
-    }
-    return initialRanks;
-  });
+  const [ranks, setRanks] = useState(initialRanks);
+  const [leaderboardList, setLeaderboardList] = useState([]);
   const [search, setSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 20;
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [search, activeTab]);
 
   // Edit Rank Modal State
   const [editingRank, setEditingRank] = useState(null);
@@ -55,20 +50,64 @@ export default function Ranks() {
   // Leader Calculation Breakdown Drawer State
   const [selectedLeader, setSelectedLeader] = useState(null);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 900);
-    return () => clearTimeout(timer);
+  const fetchRanksData = useCallback(async () => {
+    try {
+      const [ranksRes, leaderRes] = await Promise.allSettled([
+        getAllRanks(),
+        getAchieversLeaderboard()
+      ]);
+
+      if (ranksRes.status === 'fulfilled' && ranksRes.value?.success && Array.isArray(ranksRes.value.ranks)) {
+        setRanks(ranksRes.value.ranks);
+      } else {
+        const saved = localStorage.getItem('horizon_rank_ladder');
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) setRanks(parsed);
+          } catch (e) {}
+        }
+      }
+
+      if (leaderRes.status === 'fulfilled' && leaderRes.value?.success && Array.isArray(leaderRes.value.leaderboard)) {
+        setLeaderboardList(leaderRes.value.leaderboard);
+      }
+    } catch (err) {
+      console.warn('Using fallback ranks data:', err.message);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchRanksData();
+  }, [fetchRanksData]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, activeTab]);
 
   const openEditRank = (r) => {
     setEditingRank(r);
-    setEditMinInvest(r.minInvest);
-    setEditReward(r.reward);
-    setTestUserVolume(String(r.minInvest));
+    setEditMinInvest(String(r.minInvest || 1000));
+    setEditReward(String(r.reward || 50));
+    setTestUserVolume(String(r.minInvest || 1000));
   };
 
-  const handleSaveRank = () => {
+  const handleSaveRank = async () => {
     if (!editingRank) return;
+
+    try {
+      if (editingRank._id || editingRank.level) {
+        await updateRank(editingRank._id || editingRank.level, {
+          minInvest: Number(editMinInvest) || editingRank.minInvest,
+          reward: Number(editReward) || editingRank.reward,
+        });
+      }
+    } catch (err) {
+      console.warn('API update rank offline:', err.message);
+    }
+
     const updated = ranks.map(r => r.level === editingRank.level ? {
       ...r,
       minInvest: Number(editMinInvest) || r.minInvest,
@@ -80,7 +119,7 @@ export default function Ranks() {
     setEditingRank(null);
   };
 
-  const handleCreateRank = () => {
+  const handleCreateRank = async () => {
     if (!newRankName.trim()) return;
     const lvl = Number(newRankLevel) || ranks.length + 1;
     const newRankItem = {
@@ -91,6 +130,13 @@ export default function Ranks() {
       achievers: 0,
       desc: newRankDesc.trim() || 'Custom leadership milestone tier.'
     };
+
+    try {
+      await createRank(newRankItem);
+    } catch (err) {
+      console.warn('API create rank offline:', err.message);
+    }
+
     const updated = [...ranks.filter(r => r.level !== lvl), newRankItem].sort((a, b) => a.level - b.level);
     setRanks(updated);
     localStorage.setItem('horizon_rank_ladder', JSON.stringify(updated));

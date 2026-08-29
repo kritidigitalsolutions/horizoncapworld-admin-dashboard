@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   RiAddLine, RiEditLine, RiDeleteBinLine, RiCalendarLine, RiEyeLine,
   RiDraftLine, RiSendPlaneLine, RiTimeLine, RiBookOpenLine, RiPriceTag3Line,
@@ -14,6 +14,13 @@ import SearchBar from '../components/ui/SearchBar';
 import SkeletonLoader from '../components/ui/SkeletonLoader';
 import PageHeader from '../components/ui/PageHeader';
 import { newsArticles as initialArticles } from '../data/mockData';
+import {
+  getAllArticles,
+  createArticle,
+  updateArticle,
+  deleteArticle
+} from '../api/newsApi';
+import { uploadFileToCloudinary, deleteFileFromCloudinary } from '../api/uploadApi';
 
 const initialCategories = [
   'Company',
@@ -26,16 +33,7 @@ const initialCategories = [
 
 export default function NewsMedia() {
   const [loading, setLoading] = useState(true);
-  const [articles, setArticles] = useState(() => {
-    const saved = localStorage.getItem('horizon_news_broadcasts');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      } catch (e) {}
-    }
-    return initialArticles;
-  });
+  const [articles, setArticles] = useState([]);
   const [categories, setCategories] = useState(initialCategories);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
@@ -66,13 +64,58 @@ export default function NewsMedia() {
   const textareaRef = useRef(null);
   const bannerFileInputRef = useRef(null);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 900);
-    return () => clearTimeout(timer);
-  }, []);
+  const fetchArticles = useCallback(async () => {
+    try {
+      const res = await getAllArticles({
+        category: categoryFilter !== 'all' ? categoryFilter : undefined,
+        search: search.trim() || undefined,
+      });
 
-  // Handle Banner Image Upload (FileReader conversion to Data URL for instant live preview)
-  const handleBannerUpload = (e) => {
+      if (res?.success && Array.isArray(res.articles) && res.articles.length > 0) {
+        const formatted = res.articles.map(a => ({
+          _id: a._id,
+          id: a.customId || a._id,
+          title: a.title,
+          subtitle: a.subtitle || '',
+          bannerUrl: a.bannerUrl || a.image || '',
+          category: a.category || 'Company',
+          author: typeof a.author === 'object' ? a.author : { name: a.author || 'Super Admin', role: 'Platform Editorial', avatar: 'SA' },
+          content: a.content || '',
+          excerpt: a.excerpt || a.subtitle || (a.content ? a.content.slice(0, 140) + '...' : ''),
+          tags: Array.isArray(a.tags) ? a.tags : (a.tags ? a.tags.split(',') : []),
+          status: a.status || 'Published',
+          views: String(a.views || '1'),
+          readTime: a.readTime || '3 min read',
+          date: a.date || (a.createdAt ? a.createdAt.split('T')[0] : '2026-08-20'),
+        }));
+        setArticles(formatted);
+      } else {
+        const saved = localStorage.getItem('horizon_news_broadcasts');
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setArticles(parsed);
+              return;
+            }
+          } catch (e) {}
+        }
+        setArticles(initialArticles);
+      }
+    } catch (err) {
+      console.warn('Using fallback news articles data:', err.message);
+      setArticles(initialArticles);
+    } finally {
+      setLoading(false);
+    }
+  }, [categoryFilter, search]);
+
+  useEffect(() => {
+    fetchArticles();
+  }, [fetchArticles]);
+
+  // Handle Banner Image Upload (Direct Cloudinary upload with live preview and old asset cleanup)
+  const handleBannerUpload = async (e) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
@@ -80,6 +123,20 @@ export default function NewsMedia() {
         setBannerUrl(reader.result);
       };
       reader.readAsDataURL(file);
+
+      try {
+        const previousBanner = bannerUrl || editingArticle?.bannerUrl;
+        const uploadRes = await uploadFileToCloudinary(file, {
+          folder: 'horizoncap/news',
+          oldUrl: previousBanner,
+        });
+
+        if (uploadRes?.secure_url) {
+          setBannerUrl(uploadRes.secure_url);
+        }
+      } catch (err) {
+        console.warn('Banner upload to Cloudinary fallback:', err.message);
+      }
     }
   };
 
@@ -131,7 +188,7 @@ export default function NewsMedia() {
   };
 
   // Save / Publish Article
-  const handleSaveArticle = (finalStatus = 'Published') => {
+  const handleSaveArticle = async (finalStatus = 'Published') => {
     if (!title.trim() && !content.trim()) return;
 
     const tagArray = tags
@@ -142,21 +199,35 @@ export default function NewsMedia() {
     const words = content.trim().split(/\s+/).filter(Boolean).length;
     const estReadTime = `${Math.max(1, Math.ceil(words / 180))} min read`;
 
+    const articlePayload = {
+      title: title || 'Untitled Article',
+      subtitle,
+      bannerUrl,
+      category,
+      author: { name: authorName, role: authorRole, avatar: authorName.split(' ').map(n => n[0]).join('') },
+      content,
+      excerpt: subtitle || content.slice(0, 140) + '...',
+      tags: tagArray,
+      status: finalStatus,
+      readTime: estReadTime,
+    };
+
+    try {
+      if (editingArticle) {
+        await updateArticle(editingArticle._id || editingArticle.id, articlePayload);
+      } else {
+        await createArticle(articlePayload);
+      }
+    } catch (err) {
+      console.warn('API news operation offline, updating local state:', err.message);
+    }
+
     let updatedArticles;
     if (editingArticle) {
       // Update existing
       updatedArticles = articles.map(art => art.id === editingArticle.id ? {
         ...art,
-        title: title || 'Untitled Article',
-        subtitle,
-        bannerUrl,
-        category,
-        author: { name: authorName, role: authorRole, avatar: authorName.split(' ').map(n => n[0]).join('') },
-        content,
-        excerpt: subtitle || content.slice(0, 140) + '...',
-        tags: tagArray,
-        status: finalStatus,
-        readTime: estReadTime,
+        ...articlePayload,
         date: new Date().toISOString().slice(0, 10),
       } : art);
     } else {
@@ -164,17 +235,8 @@ export default function NewsMedia() {
       const newId = `art-${Date.now()}`;
       const newArticle = {
         id: newId,
-        title: title || 'Untitled Platform Announcement',
-        subtitle: subtitle || '',
-        bannerUrl,
-        category,
-        author: { name: authorName, role: authorRole, avatar: authorName.split(' ').map(n => n[0]).join('') },
-        content,
-        excerpt: subtitle || content.slice(0, 140) + '...',
-        tags: tagArray,
-        status: finalStatus,
+        ...articlePayload,
         views: '1',
-        readTime: estReadTime,
         date: new Date().toISOString().slice(0, 10),
       };
       updatedArticles = [newArticle, ...articles];
@@ -187,9 +249,20 @@ export default function NewsMedia() {
   };
 
   // Delete Article
-  const handleDeleteArticle = () => {
+  const handleDeleteArticle = async () => {
     if (!articleToDelete) return;
-    const updatedArticles = articles.filter(a => a.id !== articleToDelete.id);
+    try {
+      if (articleToDelete.bannerUrl && articleToDelete.bannerUrl.includes('cloudinary.com')) {
+        deleteFileFromCloudinary(articleToDelete.bannerUrl).catch(() => null);
+      }
+      if (articleToDelete._id || articleToDelete.id) {
+        await deleteArticle(articleToDelete._id || articleToDelete.id);
+      }
+    } catch (err) {
+      console.warn('API delete article offline:', err.message);
+    }
+
+    const updatedArticles = articles.filter(a => a.id !== articleToDelete.id && a._id !== articleToDelete._id);
     setArticles(updatedArticles);
     localStorage.setItem('horizon_news_broadcasts', JSON.stringify(updatedArticles));
     window.dispatchEvent(new CustomEvent('horizon-news-change', { detail: updatedArticles }));

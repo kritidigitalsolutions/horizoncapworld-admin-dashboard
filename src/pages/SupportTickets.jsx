@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   RiCustomerService2Line, RiTicketLine, RiChat1Line, RiCheckLine,
   RiTimeLine, RiAlertLine, RiSendPlaneFill, RiAttachment2,
@@ -19,10 +19,17 @@ import SkeletonLoader from '../components/ui/SkeletonLoader';
 import PageHeader from '../components/ui/PageHeader';
 import MediaViewerModal, { getMediaType } from '../components/ui/MediaViewerModal';
 import { supportTickets as initialTickets, users } from '../data/mockData';
+import {
+  getSupportTickets,
+  replyTicket,
+  updateTicketStatus,
+  deleteTicket
+} from '../api/supportApi';
+import { uploadFileToCloudinary, deleteFileFromCloudinary } from '../api/uploadApi';
 
 export default function SupportTickets() {
   const [loading, setLoading] = useState(true);
-  const [tickets, setTickets] = useState(initialTickets);
+  const [tickets, setTickets] = useState([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [priorityFilter, setPriorityFilter] = useState('all');
@@ -36,6 +43,7 @@ export default function SupportTickets() {
   const [isInternalNote, setIsInternalNote] = useState(false);
   const [sendEmailNotification, setSendEmailNotification] = useState(true); // Default ON
   const [attachedFile, setAttachedFile] = useState(null);
+  const [attachedFileUrl, setAttachedFileUrl] = useState(null);
 
   // Centered Media Lightbox Viewer State (Image, PDF, Video, Doc Popup)
   const [selectedMedia, setSelectedMedia] = useState(null);
@@ -53,15 +61,140 @@ export default function SupportTickets() {
 
   const fileInputRef = useRef(null);
 
+  const fetchTickets = useCallback(async () => {
+    try {
+      const res = await getSupportTickets({
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        priority: priorityFilter !== 'all' ? priorityFilter : undefined,
+        category: categoryFilter !== 'all' ? categoryFilter : undefined,
+        search: search.trim() || undefined,
+      });
+
+      if (res?.success && Array.isArray(res.tickets) && res.tickets.length > 0) {
+        const formatted = res.tickets.map(t => ({
+          _id: t._id,
+          id: t.customId || t._id,
+          customId: t.userCustomId || 'HORIZON-USR-01',
+          userName: t.userName || t.user?.name || 'Investor',
+          userEmail: t.userEmail || t.user?.email || 'investor@example.com',
+          userPhone: t.userPhone || '+1 555-0199',
+          userRank: t.userRank || 'Level 1 (Starter)',
+          userAvatar: (t.userName || 'Investor').split(' ').map(n => n[0]).join(''),
+          subject: t.subject,
+          category: t.category || 'General Support',
+          priority: t.priority || 'Medium',
+          status: t.status || 'Open',
+          createdAt: t.createdAt ? t.createdAt.split('T')[0] : 'Just now',
+          lastActivity: t.lastUpdated || 'Just now',
+          messages: Array.isArray(t.messages) ? t.messages.map(m => ({
+            id: m._id || `msg-${Date.now()}`,
+            sender: m.sender || 'user',
+            senderName: m.senderName || 'Investor',
+            time: m.time || 'Just now',
+            text: m.text || '',
+            attachments: m.attachments || []
+          })) : []
+        }));
+        setTickets(formatted);
+      } else {
+        setTickets(initialTickets);
+      }
+    } catch (err) {
+      console.warn('Using fallback support tickets data:', err.message);
+      setTickets(initialTickets);
+    } finally {
+      setLoading(false);
+    }
+  }, [search, statusFilter, priorityFilter, categoryFilter]);
+
   useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 800);
-    return () => clearTimeout(timer);
-  }, []);
+    fetchTickets();
+  }, [fetchTickets]);
 
   // Reset page when filters change
   useEffect(() => {
     setCurrentPage(1);
   }, [search, statusFilter, priorityFilter, categoryFilter]);
+
+  // Send Reply Action
+  const handleSendReply = async () => {
+    if (!replyText.trim() || !activeTicket) return;
+
+    const attachmentPayload = attachedFileUrl || attachedFile;
+    const attachments = attachmentPayload ? [attachmentPayload] : [];
+
+    try {
+      if (activeTicket._id || activeTicket.id) {
+        await replyTicket(activeTicket._id || activeTicket.id, {
+          message: replyText.trim(),
+          text: replyText.trim(),
+          isInternal: isInternalNote,
+          attachments,
+        });
+      }
+    } catch (err) {
+      console.warn('API reply ticket offline:', err.message);
+    }
+
+    const newMsg = {
+      id: `msg-${Date.now()}`,
+      sender: isInternalNote ? 'internal' : 'admin',
+      senderName: isInternalNote ? 'Internal Admin Note' : 'Senior Support Officer',
+      time: 'Just now',
+      text: replyText.trim(),
+      attachments: attachments
+    };
+
+    const updatedTicket = {
+      ...activeTicket,
+      lastActivity: 'Just now',
+      messages: [...(activeTicket.messages || []), newMsg],
+      status: activeTicket.status === 'Open' && !isInternalNote ? 'In Progress' : activeTicket.status
+    };
+
+    setTickets(tickets.map(t => t.id === activeTicket.id ? updatedTicket : t));
+    setActiveTicket(updatedTicket);
+    setReplyText('');
+    setAttachedFile(null);
+    setAttachedFileUrl(null);
+    setIsInternalNote(false);
+  };
+
+  // Change Ticket Status
+  const handleStatusChange = async (newStatus) => {
+    if (!activeTicket) return;
+
+    try {
+      if (activeTicket._id || activeTicket.id) {
+        await updateTicketStatus(activeTicket._id || activeTicket.id, newStatus);
+      }
+    } catch (err) {
+      console.warn('API update ticket status offline:', err.message);
+    }
+
+    const updated = { ...activeTicket, status: newStatus };
+    setTickets(tickets.map(t => t.id === activeTicket.id ? updated : t));
+    setActiveTicket(updated);
+  };
+
+  // Delete Ticket Action
+  const handleConfirmDelete = async () => {
+    if (!deletingTicket) return;
+
+    try {
+      if (deletingTicket._id || deletingTicket.id) {
+        await deleteTicket(deletingTicket._id || deletingTicket.id);
+      }
+    } catch (err) {
+      console.warn('API delete ticket offline:', err.message);
+    }
+
+    setTickets(tickets.filter(t => t.id !== deletingTicket.id && t._id !== deletingTicket._id));
+    if (activeTicket && (activeTicket.id === deletingTicket.id || activeTicket._id === deletingTicket._id)) {
+      setActiveTicket(null);
+    }
+    setDeletingTicket(null);
+  };
 
   // Filter logic
   const filteredTickets = tickets.filter(t => {
@@ -84,51 +217,6 @@ export default function SupportTickets() {
   const openCount = tickets.filter(t => t.status === 'Open').length;
   const inProgressCount = tickets.filter(t => t.status === 'In Progress').length;
   const resolvedCount = tickets.filter(t => t.status === 'Resolved' || t.status === 'Closed').length;
-
-  // Send Reply / Post Note
-  const handleSendReply = () => {
-    if (!replyText.trim() || !activeTicket) return;
-
-    const newMsg = {
-      id: `msg-${Date.now()}`,
-      sender: isInternalNote ? 'internal' : 'admin',
-      senderName: isInternalNote ? 'Internal Admin Note' : 'Senior Support Officer',
-      time: 'Just now',
-      text: replyText.trim(),
-      attachments: attachedFile ? [attachedFile] : []
-    };
-
-    const updatedTicket = {
-      ...activeTicket,
-      lastActivity: 'Just now',
-      messages: [...activeTicket.messages, newMsg],
-      status: activeTicket.status === 'Open' && !isInternalNote ? 'In Progress' : activeTicket.status
-    };
-
-    setTickets(tickets.map(t => t.id === activeTicket.id ? updatedTicket : t));
-    setActiveTicket(updatedTicket);
-    setReplyText('');
-    setAttachedFile(null);
-    setIsInternalNote(false);
-  };
-
-  // Change Ticket Status
-  const handleStatusChange = (newStatus) => {
-    if (!activeTicket) return;
-    const updated = { ...activeTicket, status: newStatus };
-    setTickets(tickets.map(t => t.id === activeTicket.id ? updated : t));
-    setActiveTicket(updated);
-  };
-
-  // Delete Ticket Action
-  const handleConfirmDelete = () => {
-    if (!deletingTicket) return;
-    setTickets(tickets.filter(t => t.id !== deletingTicket.id));
-    if (activeTicket && activeTicket.id === deletingTicket.id) {
-      setActiveTicket(null);
-    }
-    setDeletingTicket(null);
-  };
 
   // Create New Ticket
   const handleCreateTicket = (e) => {
@@ -848,9 +936,20 @@ export default function SupportTickets() {
                 ref={fileInputRef}
                 className="hidden"
                 accept="image/*,video/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt"
-                onChange={e => {
+                onChange={async (e) => {
                   if (e.target.files && e.target.files[0]) {
-                    setAttachedFile(e.target.files[0].name);
+                    const file = e.target.files[0];
+                    setAttachedFile(file.name);
+                    try {
+                      const uploadRes = await uploadFileToCloudinary(file, {
+                        folder: "horizoncap/tickets",
+                      });
+                      if (uploadRes?.secure_url) {
+                        setAttachedFileUrl(uploadRes.secure_url);
+                      }
+                    } catch (err) {
+                      console.warn("Attachment upload fallback:", err.message);
+                    }
                   }
                 }}
               />

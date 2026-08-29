@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   RiTeamLine, RiFlashlightLine, RiCoinsLine, RiCalculatorLine,
   RiCheckLine, RiEditLine, RiNodeTree, RiUserLine, RiShieldCheckLine,
@@ -14,18 +14,20 @@ import Pagination from '../components/ui/Pagination';
 import SkeletonLoader from '../components/ui/SkeletonLoader';
 import PageHeader from '../components/ui/PageHeader';
 import { referralCommissions as initialCommissions, users } from '../data/mockData';
+import {
+  getReferralSettings,
+  updateReferralSetting,
+  getPromotersNetwork
+} from '../api/referralsApi';
 
 export default function Referrals() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('plans'); // 'plans', 'promoters'
   const [commissions, setCommissions] = useState(initialCommissions);
+  const [promoterList, setPromoterList] = useState([]);
   const [search, setSearch] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 20;
-
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [search, activeTab]);
 
   // Edit Commission Modal State
   const [editingCommission, setEditingCommission] = useState(null);
@@ -37,38 +39,82 @@ export default function Referrals() {
   // Promoter Downline Tree Audit Drawer State
   const [selectedPromoter, setSelectedPromoter] = useState(null);
 
+  const fetchReferralData = useCallback(async () => {
+    try {
+      const [settingsRes, promotersRes] = await Promise.allSettled([
+        getReferralSettings(),
+        getPromotersNetwork({ search: search.trim() || undefined })
+      ]);
+
+      if (settingsRes.status === 'fulfilled' && settingsRes.value?.success && Array.isArray(settingsRes.value.settings)) {
+        setCommissions(settingsRes.value.settings);
+      } else {
+        const saved = localStorage.getItem('horizon_referral_commissions');
+        if (saved) {
+          try {
+            setCommissions(JSON.parse(saved));
+          } catch (e) {}
+        }
+      }
+
+      if (promotersRes.status === 'fulfilled' && promotersRes.value?.success && Array.isArray(promotersRes.value.promoters)) {
+        setPromoterList(promotersRes.value.promoters);
+      }
+    } catch (err) {
+      console.warn('Using fallback referrals data:', err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [search]);
+
   useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 900);
-    return () => clearTimeout(timer);
-  }, []);
+    fetchReferralData();
+  }, [fetchReferralData]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, activeTab]);
 
   const openEditCommission = (c) => {
     setEditingCommission(c);
-    setEditInvestComm(c.investCommission.replace('%', ''));
-    setEditEarnComm(c.earningsCommission.replace('%', ''));
+    setEditInvestComm(String(c.investCommission || '5').replace('%', ''));
+    setEditEarnComm(String(c.earningsCommission || '1').replace('%', ''));
     setTestDepositAmount('10000');
     setTestMonthlyYield('1500');
   };
 
-  const handleSaveCommission = () => {
+  const handleSaveCommission = async () => {
     if (!editingCommission) return;
+
+    try {
+      if (editingCommission._id || editingCommission.level) {
+        await updateReferralSetting(editingCommission._id || editingCommission.level, {
+          investCommission: `${editInvestComm}%`,
+          earningsCommission: `${editEarnComm}%`,
+        });
+      }
+    } catch (err) {
+      console.warn('API update referral offline:', err.message);
+    }
+
     const updated = commissions.map(c => c.level === editingCommission.level ? {
       ...c,
       investCommission: `${editInvestComm}%`,
       earningsCommission: `${editEarnComm}%`,
     } : c);
+
     setCommissions(updated);
     localStorage.setItem('horizon_referral_commissions', JSON.stringify(updated));
     window.dispatchEvent(new CustomEvent('horizon-referrals-change', { detail: updated }));
     setEditingCommission(null);
   };
 
-  // Promoter calculations
-  const promoterData = users.map((u) => {
+  // Promoter calculations fallback
+  const basePromoterData = promoterList.length > 0 ? promoterList : users.map((u) => {
     const rawInvest = Number((u.totalInvested || '$0').replace(/[^0-9.-]+/g, '')) || 0;
     const teamVolume = rawInvest * (u.totalReferrals > 0 ? (u.totalReferrals * 1.8 + 1) : 0);
-    const directComm = (teamVolume * 0.5) * 0.05; // Level 1 @ 5%
-    const multiTierComm = (teamVolume * 0.5) * 0.035; // L2-L5 average 3.5%
+    const directComm = (teamVolume * 0.5) * 0.05;
+    const multiTierComm = (teamVolume * 0.5) * 0.035;
     const totalComm = directComm + multiTierComm;
 
     return {
@@ -80,10 +126,10 @@ export default function Referrals() {
     };
   });
 
-  const filteredPromoters = promoterData.filter(p => {
+  const filteredPromoters = basePromoterData.filter(p => {
     const q = search.trim().toLowerCase();
     return !q ||
-      p.name.toLowerCase().includes(q) ||
+      p.name?.toLowerCase().includes(q) ||
       (p.customId || '').toLowerCase().includes(q) ||
       (p.email || '').toLowerCase().includes(q) ||
       (p.phone || '').toLowerCase().includes(q);

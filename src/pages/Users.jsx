@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   RiEyeLine, RiDeleteBinLine, RiMailLine, RiPhoneLine,
   RiGlobalLine, RiCalendarEventLine, RiUserLine, RiAlertLine,
   RiMoneyDollarCircleLine, RiFlashlightLine, RiShieldFlashLine,
   RiLeafLine, RiCoinsLine, RiWallet3Line, RiArrowUpCircleLine,
   RiArrowDownCircleLine, RiExchangeDollarLine, RiPercentLine, RiTimeLine,
-  RiCalendarCheckLine, RiGroupLine
+  RiCalendarCheckLine, RiGroupLine, RiCheckLine, RiCloseLine
 } from 'react-icons/ri';
 import Badge from '../components/ui/Badge';
 import Button from '../components/ui/Button';
@@ -15,10 +15,16 @@ import Pagination from '../components/ui/Pagination';
 import SkeletonLoader from '../components/ui/SkeletonLoader';
 import PageHeader from '../components/ui/PageHeader';
 import { users as initialUsers } from '../data/mockData';
+import {
+  getAllUsers,
+  updateUserStatus,
+  adjustUserWallet,
+  deleteUser
+} from '../api/usersApi';
 
 export default function Users() {
   const [loading, setLoading] = useState(true);
-  const [userList, setUserList] = useState(initialUsers);
+  const [userList, setUserList] = useState([]);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [selectedUser, setSelectedUser] = useState(null);
@@ -26,10 +32,56 @@ export default function Users() {
   const [currentPage, setCurrentPage] = useState(1);
   const pageSize = 20;
 
+  const fetchUsers = useCallback(async () => {
+    try {
+      const res = await getAllUsers({
+        search: search.trim() || undefined,
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+      });
+
+      if (res?.success && Array.isArray(res.users) && res.users.length > 0) {
+        const formatted = res.users.map(u => ({
+          _id: u._id,
+          id: u.customId || u._id,
+          customId: u.customId || 'HORIZON-USR-01',
+          name: u.name || 'Investor',
+          email: u.email || '',
+          phone: u.phone || '+1 555-0199',
+          country: u.country || 'Global',
+          joined: u.createdAt ? u.createdAt.split('T')[0] : '2026-01-01',
+          status: u.status || 'Active',
+          payoutType: 'Per Second (Live)',
+          activeContracts: u.activeInvestments || 0,
+          totalInvested: Number(u.totalInvested || 0),
+          totalEarned: Number(u.totalProfit || u.totalEarned || 0),
+          totalWithdrawn: Number(u.totalWithdrawn || 0),
+          depositWallet: Number(u.depositWallet || 0),
+          earningWallet: Number(u.earningWallet || 0),
+          referredBy: u.sponsorId || 'HORIZON-HQ',
+          totalReferrals: u.totalReferrals || 0,
+          directReferrals: u.directReferrals || 0,
+          rank: {
+            level: u.rankLevel || 1,
+            name: u.currentRank || 'Starter',
+          },
+          is2FAEnabled: !!u.is2FAEnabled,
+          recentTransactions: [],
+        }));
+        setUserList(formatted);
+      } else {
+        setUserList(initialUsers);
+      }
+    } catch (err) {
+      console.warn('Using fallback users data:', err.message);
+      setUserList(initialUsers);
+    } finally {
+      setLoading(false);
+    }
+  }, [search, statusFilter]);
+
   useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 900);
-    return () => clearTimeout(timer);
-  }, []);
+    fetchUsers();
+  }, [fetchUsers]);
 
   // Reset page to 1 on filter/search change
   useEffect(() => {
@@ -39,13 +91,35 @@ export default function Users() {
   const statusVariant = (status) => status === 'Active' ? 'success' : 'danger';
 
   // Handle Delete Confirmation
-  const handleDeleteUser = () => {
+  const handleDeleteUser = async () => {
     if (!userToDelete) return;
-    setUserList(userList.filter(u => u.id !== userToDelete.id));
-    if (selectedUser?.id === userToDelete.id) {
+    try {
+      if (userToDelete._id) {
+        await deleteUser(userToDelete._id);
+      }
+    } catch (err) {
+      console.warn('API delete user offline:', err.message);
+    }
+    setUserList(prev => prev.filter(u => u.id !== userToDelete.id && u._id !== userToDelete._id));
+    if (selectedUser?.id === userToDelete.id || selectedUser?._id === userToDelete._id) {
       setSelectedUser(null);
     }
     setUserToDelete(null);
+  };
+
+  // Toggle user status
+  const handleToggleStatus = async (user, nextStatus) => {
+    try {
+      if (user._id) {
+        await updateUserStatus(user._id, nextStatus);
+      }
+    } catch (err) {
+      console.warn('API update user status offline:', err.message);
+    }
+    setUserList(prev => prev.map(u => u.id === user.id ? { ...u, status: nextStatus } : u));
+    if (selectedUser?.id === user.id) {
+      setSelectedUser(prev => ({ ...prev, status: nextStatus }));
+    }
   };
 
   // Comprehensive Search across Name, Email, Phone, Country, ID, Date of Join, and Payout Type

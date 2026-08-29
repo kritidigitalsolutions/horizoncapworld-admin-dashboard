@@ -11,6 +11,14 @@ import Button from '../components/ui/Button';
 import OTPInput from '../components/ui/OTPInput';
 import SkeletonLoader from '../components/ui/SkeletonLoader';
 import PageHeader from '../components/ui/PageHeader';
+import {
+  getAdminProfile,
+  updateAdminProfile,
+  changeAdminPassword,
+  getAdminSettings,
+  updateAdminSettings
+} from '../api/authApi';
+import { uploadFileToCloudinary, deleteFileFromCloudinary } from '../api/uploadApi';
 
 export default function Settings() {
   const [loading, setLoading] = useState(true);
@@ -67,42 +75,113 @@ export default function Settings() {
   const [alertsSaved, setAlertsSaved] = useState(false);
 
   useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 700);
-    return () => clearTimeout(timer);
+    const fetchProfileAndSettings = async () => {
+      try {
+        const [profRes, setRes] = await Promise.allSettled([
+          getAdminProfile(),
+          getAdminSettings()
+        ]);
+
+        if (profRes.status === 'fulfilled' && profRes.value?.success && profRes.value.admin) {
+          const a = profRes.value.admin;
+          if (a.name) setProfileName(a.name);
+          if (a.email) setProfileEmail(a.email);
+          if (a.recoveryEmail) setProfileRecovery(a.recoveryEmail);
+          if (a.avatar) setAdminAvatar(a.avatar);
+          if (a.is2FAEnabled !== undefined) setTwoFactorEnabled(a.is2FAEnabled);
+        }
+
+        if (setRes.status === 'fulfilled' && setRes.value?.success && setRes.value.settings) {
+          if (setRes.value.settings.automatedAlerts) {
+            setAutomatedAlerts(prev => ({ ...prev, ...setRes.value.settings.automatedAlerts }));
+          }
+        }
+      } catch (err) {
+        console.warn('Using fallback admin settings data:', err.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchProfileAndSettings();
   }, []);
 
   // Avatar Upload Handler
-  const handleAvatarUpload = (e) => {
+  const handleAvatarUpload = async (e) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
       reader.onload = (uploadEvent) => {
-        const dataUrl = uploadEvent.target.result;
-        setAdminAvatar(dataUrl);
-        localStorage.setItem('horizon_admin_avatar', dataUrl);
-        window.dispatchEvent(new CustomEvent('admin-avatar-change', { detail: dataUrl }));
+        const previewUrl = uploadEvent.target.result;
+        setAdminAvatar(previewUrl);
       };
       reader.readAsDataURL(file);
+
+      try {
+        const previousAvatar = adminAvatar;
+        const uploadRes = await uploadFileToCloudinary(file, {
+          folder: 'horizoncap/avatars/admin',
+          oldUrl: previousAvatar,
+        });
+
+        if (uploadRes?.secure_url) {
+          const finalUrl = uploadRes.secure_url;
+          setAdminAvatar(finalUrl);
+          localStorage.setItem('horizon_admin_avatar', finalUrl);
+          window.dispatchEvent(new CustomEvent('admin-avatar-change', { detail: finalUrl }));
+          await updateAdminProfile({ avatar: finalUrl });
+        }
+      } catch (err) {
+        console.warn('Direct avatar upload to Cloudinary fallback:', err.message);
+      }
     }
   };
 
   // Avatar Remove Handler
-  const handleRemoveAvatar = () => {
+  const handleRemoveAvatar = async () => {
+    const previousAvatar = adminAvatar;
     setAdminAvatar('');
     localStorage.removeItem('horizon_admin_avatar');
     window.dispatchEvent(new CustomEvent('admin-avatar-change', { detail: '' }));
     if (avatarInputRef.current) avatarInputRef.current.value = '';
+
+    if (previousAvatar && previousAvatar.includes('cloudinary.com')) {
+      deleteFileFromCloudinary(previousAvatar).catch(() => null);
+    }
+
+    try {
+      await updateAdminProfile({ avatar: '' });
+    } catch (err) {
+      console.warn('Avatar removal sync failed:', err.message);
+    }
   };
 
-  const handleSaveProfile = (e) => {
+  const handleSaveProfile = async (e) => {
     e.preventDefault();
+    try {
+      await updateAdminProfile({
+        name: profileName,
+        email: profileEmail,
+        recoveryEmail: profileRecovery,
+        avatar: adminAvatar,
+        is2FAEnabled: twoFactorEnabled
+      });
+    } catch (err) {
+      console.warn('API update admin profile offline:', err.message);
+    }
     setProfileSaved(true);
     setTimeout(() => setProfileSaved(false), 3000);
   };
 
   // Handle Email Update with OTP
-  const handleCommitEmailUpdate = () => {
+  const handleCommitEmailUpdate = async () => {
     if (!newEmailAddress.trim()) return;
+    try {
+      await updateAdminProfile({
+        email: newEmailAddress.trim()
+      });
+    } catch (err) {
+      console.warn('API update admin email offline:', err.message);
+    }
     setProfileEmail(newEmailAddress.trim());
     setEmailUpdated(true);
     setTimeout(() => {
@@ -114,8 +193,16 @@ export default function Settings() {
   };
 
   // Handle Password Update with OTP
-  const handleCommitPasswordUpdate = () => {
+  const handleCommitPasswordUpdate = async () => {
     if (!newPassword || newPassword !== confirmPassword) return;
+    try {
+      await changeAdminPassword({
+        currentPassword,
+        newPassword
+      });
+    } catch (err) {
+      console.warn('API change admin password offline:', err.message);
+    }
     setPasswordUpdated(true);
     setTimeout(() => {
       setPasswordUpdated(false);
@@ -128,7 +215,14 @@ export default function Settings() {
   };
 
   // Handle Save Alerts
-  const handleSaveAlerts = () => {
+  const handleSaveAlerts = async () => {
+    try {
+      await updateAdminSettings({
+        automatedAlerts
+      });
+    } catch (err) {
+      console.warn('API update admin settings offline:', err.message);
+    }
     setAlertsSaved(true);
     setTimeout(() => setAlertsSaved(false), 3000);
   };

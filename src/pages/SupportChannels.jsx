@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   RiCustomerService2Line, RiWhatsappLine, RiTelegramLine, RiMailSendLine,
   RiPhoneLine, RiDiscordLine, RiTwitterXLine, RiYoutubeLine, RiInstagramLine,
@@ -14,19 +14,16 @@ import SearchBar from '../components/ui/SearchBar';
 import SkeletonLoader from '../components/ui/SkeletonLoader';
 import PageHeader from '../components/ui/PageHeader';
 import { supportChannels as initialChannels } from '../data/mockData';
+import {
+  getChannels,
+  createChannel,
+  updateChannel,
+  deleteChannel
+} from '../api/supportApi';
 
 export default function SupportChannels() {
   const [loading, setLoading] = useState(true);
-  const [channels, setChannels] = useState(() => {
-    const saved = localStorage.getItem('horizon_support_channels');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-      } catch (e) {}
-    }
-    return initialChannels;
-  });
+  const [channels, setChannels] = useState([]);
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [search, setSearch] = useState('');
 
@@ -49,10 +46,35 @@ export default function SupportChannels() {
   const [deletingChannel, setDeletingChannel] = useState(null);
   const [copiedId, setCopiedId] = useState(null);
 
-  useEffect(() => {
-    const timer = setTimeout(() => setLoading(false), 900);
-    return () => clearTimeout(timer);
+  const fetchChannels = useCallback(async () => {
+    try {
+      const res = await getChannels();
+      if (res?.success && Array.isArray(res.channels) && res.channels.length > 0) {
+        setChannels(res.channels);
+      } else {
+        const saved = localStorage.getItem('horizon_support_channels');
+        if (saved) {
+          try {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              setChannels(parsed);
+              return;
+            }
+          } catch (e) {}
+        }
+        setChannels(initialChannels);
+      }
+    } catch (err) {
+      console.warn('Using fallback channels data:', err.message);
+      setChannels(initialChannels);
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchChannels();
+  }, [fetchChannels]);
 
   const handleOpenAdd = () => {
     setEditingChannel(null);
@@ -76,9 +98,19 @@ export default function SupportChannels() {
     setIsModalOpen(true);
   };
 
-  const handleSave = (e) => {
+  const handleSave = async (e) => {
     e.preventDefault();
     if (!formData.title || !formData.url) return;
+
+    try {
+      if (editingChannel) {
+        await updateChannel(editingChannel._id || editingChannel.id, formData);
+      } else {
+        await createChannel(formData);
+      }
+    } catch (err) {
+      console.warn('API channels offline:', err.message);
+    }
 
     let updated;
     if (editingChannel) {
@@ -97,9 +129,18 @@ export default function SupportChannels() {
     setIsModalOpen(false);
   };
 
-  const handleDelete = () => {
+  const handleDelete = async () => {
     if (!deletingChannel) return;
-    const updated = channels.filter(c => c.id !== deletingChannel.id);
+
+    try {
+      if (deletingChannel._id || deletingChannel.id) {
+        await deleteChannel(deletingChannel._id || deletingChannel.id);
+      }
+    } catch (err) {
+      console.warn('API delete channel offline:', err.message);
+    }
+
+    const updated = channels.filter(c => c.id !== deletingChannel.id && c._id !== deletingChannel._id);
     setChannels(updated);
     localStorage.setItem('horizon_support_channels', JSON.stringify(updated));
     window.dispatchEvent(new CustomEvent('horizon-support-channels-change', { detail: updated }));
